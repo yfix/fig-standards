@@ -1,8 +1,8 @@
 ﻿HTTP message interfaces
 =======================
 
-This document describes common interfaces for representing HTTP messages
-described in [RFC 7230].
+This document describes common interfaces for representing HTTP messages as
+described in [RFC 7230] and [RFC 7231].
 
 The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD",
 "SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be
@@ -10,6 +10,7 @@ interpreted as described in [RFC 2119].
 
 [RFC 2119]: http://www.ietf.org/rfc/rfc2119.txt
 [RFC 7230]: http://www.ietf.org/rfc/rfc7230.txt
+[RFC 7231]: http://www.ietf.org/rfc/rfc7231.txt
 
 1. Specification
 ----------------
@@ -24,6 +25,13 @@ a server to a client. These messages are represented by
   `Psr\Http\Message\MessageInterface`. While `Psr\Http\Message\MessageInterface` MAY be
   implemented directly, implementors are encouraged to implement
   `Psr\Http\Message\RequestInterface` and `Psr\Http\Message\ResponseInterface`.
+
+An additional interface, `Psr\Http\Message\IncomingRequestInterface`, extends
+`Psr\Http\Message\RequestInterface`, to provide accessors to common server-side
+environment parameters, including the deserialized query string arguments,
+deserialized body parameters, the incoming upload files information
+(typically represented in PHP via `$_FILES`), cookies (typically injected from
+PHP's `$_COOKIE`), and matched routing parameters.
 
 #### 1.2 HTTP Headers
 
@@ -73,7 +81,7 @@ $header = $message->getHeaderAsArray('foo');
 Note: Not all header values can be concatenated using a comma
 (e.g., Set-Cookie). When working with such headers, consumers of the
 MessageInterface SHOULD rely on the `getHeaderAsArray()` method for retrieving
-such multi-valued headers
+such multi-valued headers.
 
 ### 1.2 Streams
 
@@ -82,12 +90,12 @@ message can be very small or extremely large. Attempting to represent the body
 of a message as a string can easily consume more memory than intended because
 the body must be stored completely in memory. Attempting to store the body of a
 request or response in memory would preclude the use of that implementation from
-being able to work with large message bodies. The `StreamInterface` is used in
-order to hide the implementation details of where a stream of data is read from
+being able to work with large message bodies. The `StreamableInterface` is used in
+order to hide the implementation details when a stream of data is read from
 or written to.
 
-`StreamInterface` exposes several methods that enable streams to be read
-  from, written to, and traversed effectively.
+`StreamableInterface` exposes several methods that enable streams to be read
+from, written to, and traversed effectively.
 
 - Streams expose their capabilities using three methods: `isReadable()`,
   `isWritable()`, and `isSeekable()`. These methods can be used by stream
@@ -130,25 +138,37 @@ interface MessageInterface
     public function getProtocolVersion();
 
     /**
+     * Set the HTTP protocol version.
+     *
+     * The version string MUST contain only the HTTP version number (e.g.,
+     * "1.1", "1.0").
+     *
+     * @param string $version HTTP protocol version
+     *
+     * @return void
+     */
+    public function setProtocolVersion($version);
+
+    /**
      * Gets the body of the message.
      *
-     * @return StreamInterface|null Returns the body, or null if not set.
+     * @return StreamableInterface|null Returns the body, or null if not set.
      */
     public function getBody();
 
     /**
      * Sets the body of the message.
      *
-     * The body MUST be a StreamInterface object. Setting the body to null MUST
+     * The body MUST be a StreamableInterface object. Setting the body to null MUST
      * remove the existing body.
      *
-     * @param StreamInterface|null $body Body.
+     * @param StreamableInterface|null $body Body.
      *
      * @return void
      *
      * @throws \InvalidArgumentException When the body is not valid.
      */
-    public function setBody(StreamInterface $body = null);
+    public function setBody(StreamableInterface $body = null);
 
     /**
      * Gets all message headers.
@@ -206,7 +226,9 @@ interface MessageInterface
      * or an array of strings.
      *
      * @param string $header Header name
-     * @param string|string[] $value  Header value(s)
+     * @param string|string[]|object|object[] $value Header value(s). Values may 
+     *                                               be objects as long as they
+     *                                               can be cast to strings.
      *
      * @return void
      */
@@ -215,8 +237,9 @@ interface MessageInterface
     /**
      * Sets headers, replacing any headers that have already been set on the message.
      *
-     * The array keys MUST be a string. The array values must be either a
-     * string or an array of strings.
+     * The array keys MUST be a string. Each array value MUST be either a string
+     * or object, or array of strings and/or objects; any object used as a
+     * header value MUST be able to be cast to a string.
      *
      * @param array $headers Headers to set.
      *
@@ -231,7 +254,8 @@ interface MessageInterface
      * value will be appended to the existing list.
      *
      * @param string $header Header name to add
-     * @param string $value  Value of the header
+     * @param string|object $value Value of the header; object is allowed if it
+     *                             can be cast to a string.
      *
      * @return void
      */
@@ -241,7 +265,10 @@ interface MessageInterface
      * Merges in an associative array of headers.
      *
      * Each array key MUST be a string representing the case-insensitive name
-     * of a header. Each value MUST be either a string or an array of strings.
+     * of a header. Each value MUST be either a string or object, or array of
+     * strings and/or objects; any object used as a header value MUST be able
+     * to be cast to a string.
+     *
      * For each value, the value is appended to any existing header of the same
      * name, or, if a header does not already exist by the given name, then the
      * header is added.
@@ -272,7 +299,7 @@ namespace Psr\Http\Message;
 
 /**
  * A HTTP request message.
- * @link http://tools.ietf.org/html/rfc2616#section-5
+ * @link http://tools.ietf.org/html/rfc7230#section-3
  */
 interface RequestInterface extends MessageInterface
 {
@@ -325,6 +352,148 @@ interface RequestInterface extends MessageInterface
 }
 ```
 
+### 3.2.1 `Psr\Http\Message\IncomingRequestInterface`
+
+```php
+<?php
+
+namespace Psr\Http\Message;
+
+/**
+ * An incoming (server-side) HTTP request.
+ *
+ * This interface further describes a server-side request and provides
+ * accessors and mutators around common request data, such as query
+ * string arguments, body parameters, upload file metadata, cookies, and
+ * matched routing parameters.
+ */
+interface IncomingRequestInterface extends RequestInterface
+{
+    /**
+     * Retrieve cookies.
+     *
+     * Retrieves cookies sent by the client to the server.
+     *
+     * The assumption is these are injected during instantiation, typically
+     * from PHP's $_COOKIE superglobal, and should remain immutable over the
+     * course of the incoming request.
+     *
+     * The return value can be either an array or an object that acts like
+     * an array (e.g., implements ArrayAccess, or an ArrayObject).
+     *
+     * @return array|\ArrayAccess
+     */
+    public function getCookieParams();
+
+    /**
+     * Set cookie parameters.
+     *
+     * Allows a library to set the cookie parameters. Use cases include
+     * libraries that implement additional security practices, such as
+     * encrypting or hashing cookie values; in such cases, they will read
+     * the original value, filter them, and re-inject into the incoming
+     * request..
+     *
+     * The value provided should be an array or array-like object
+     * (e.g., implements ArrayAccess, or an ArrayObject).
+     *
+     * @param array|\ArrayAccess $cookies Cookie values/structs
+     *
+     * @return void
+     */
+    public function setCookieParams($cookies);
+
+    /**
+     * Retrieve query string arguments.
+     *
+     * Retrieves the deserialized query string arguments, if any.
+     *
+     * The assumption is these are injected during instantiation, typically
+     * from PHP's $_GET superglobal, and should remain immutable over the
+     * course of the incoming request.
+     *
+     * The return value can be either an array or an object that acts like
+     * an array (e.g., implements ArrayAccess, or an ArrayObject).
+     *
+     * @return array
+     */
+    public function getQueryParams();
+
+    /**
+     * Retrieve the upload file metadata.
+     *
+     * This method should return file upload metadata in the same structure
+     * as PHP's $_FILES superglobal.
+     *
+     * The assumption is these are injected during instantiation, typically
+     * from PHP's $_FILES superglobal, and should remain immutable over the
+     * course of the incoming request.
+     *
+     * The return value can be either an array or an object that acts like
+     * an array (e.g., implements ArrayAccess, or an ArrayObject).
+     *
+     * @return array Upload file(s) metadata, if any.
+     */
+    public function getFileParams();
+
+    /**
+     * Retrieve any parameters provided in the request body.
+     *
+     * If the request body can be deserialized, and if the deserialized values
+     * can be represented as an array or object, this method can be used to
+     * retrieve them.
+     *
+     * In other cases, the parent getBody() method should be used to retrieve
+     * the body content.
+     *
+     * @return array|object The deserialized body parameters, if any. These may
+     *                      be either an array or an object, though an array or
+     *                      array-like object is recommended.
+     */
+    public function getBodyParams();
+
+    /**
+     * Set the request body parameters.
+     *
+     * If the body content can be deserialized, the values obtained may then
+     * be injected into the response using this method. This method will
+     * typically be invoked by a factory marshaling request parameters.
+     *
+     * @param array|object $values The deserialized body parameters, if any.
+     *                             These may be either an array or an object,
+     *                             though an array or array-like object is
+     *                             recommended.
+     *
+     * @return void
+     */
+    public function setBodyParams($values);
+
+    /**
+     * Retrieve parameters matched during routing.
+     *
+     * If a router or similar is used to match against the path and/or request,
+     * this method can be used to retrieve the results, so long as those
+     * results can be represented as an array or array-like object.
+     *
+     * @return array|\ArrayAccess Path parameters matched by routing
+     */
+    public function getPathParams();
+
+    /**
+     * Set parameters discovered by matching that path
+     *
+     * If a router or similar is used to match against the path and/or request,
+     * this method can be used to inject the request with the results, so long
+     * as those results can be represented as an array or array-like object.
+     *
+     * @param array|\ArrayAccess $values Path parameters matched by routing
+     *
+     * @return void
+     */
+    public function setPathParams(array $values);
+}
+```
+
 ### 3.3 `Psr\Http\Message\ResponseInterface`
 
 ```php
@@ -334,7 +503,8 @@ namespace Psr\Http\Message;
 
 /**
  * A HTTP response message.
- * @link http://tools.ietf.org/html/rfc2616#section-6
+ * @link http://tools.ietf.org/html/rfc7231#section-6
+ * @link http://tools.ietf.org/html/rfc7231#section-7
  */
 interface ResponseInterface extends MessageInterface
 {
@@ -360,9 +530,12 @@ interface ResponseInterface extends MessageInterface
      *
      * Because a Reason-Phrase is not a required element in response
      * Status-Line, the Reason-Phrase value MAY be null. Implementations MAY
-     * choose to return the default RFC 2616 recommended reason phrase for the
-     * response's Status-Code.
+     * choose to return the default RFC 7231 recommended reason phrase (or those
+     * listed in the IANA HTTP Status Code Registry) for the response's
+     * Status-Code.
      *
+     * @link http://tools.ietf.org/html/rfc7231#section-6
+     * @link http://www.iana.org/assignments/http-status-codes/http-status-codes.xhtml
      * @return string|null Reason phrase, or null if unknown.
      */
     public function getReasonPhrase();
@@ -371,7 +544,8 @@ interface ResponseInterface extends MessageInterface
      * Sets the Reason-Phrase of the response.
      *
      * If no Reason-Phrase is specified, implementations MAY choose to default
-     * to the RFC 2616 recommended reason phrase for the response's Status-Code.
+     * to the RFC 7231 or IANA recommended reason phrase for the response's
+     * Status-Code.
      *
      * @param string $phrase The Reason-Phrase to set.
      */
@@ -379,7 +553,7 @@ interface ResponseInterface extends MessageInterface
 }
 ```
 
-### 3.4 `Psr\Http\Message\StreamInterface`
+### 3.4 `Psr\Http\Message\StreamableInterface`
 
 ```php
 <?php
@@ -387,9 +561,13 @@ interface ResponseInterface extends MessageInterface
 namespace Psr\Http\Message;
 
 /**
- * Describes a stream instance.
+ * Describes streamable content.
+ *
+ * Typically, an instance will wrap a PHP stream; this interface provides
+ * a wrapper around the most common operations, including serialization of
+ * the entire stream to a string.
  */
-interface StreamInterface
+interface StreamableInterface
 {
     /**
      * Reads all data from the stream into a string, from the beginning to end.
@@ -415,9 +593,24 @@ interface StreamInterface
      *
      * After the stream has been detached, the stream is in an unusable state.
      *
-     * @return void
+     * @return resource|null Underlying PHP stream, if any
      */
     public function detach();
+
+    /**
+     * Replaces the underlying stream resource with the provided stream.
+     *
+     * Use this method to replace the underlying stream with another; as an
+     * example, in server-side code, if you decide to return a file, you
+     * would replace the original content-oriented stream with the file
+     * stream.
+     *
+     * Any internal state such as caching of cursor position should be reset
+     * when attach() is called, as the stream has changed.
+     *
+     * @return void
+     */
+    public function attach($stream);
 
     /**
      * Get the size of the stream if known
@@ -494,17 +687,32 @@ interface StreamInterface
      *                    them. Fewer than $length bytes may be returned if
      *                    underlying stream call returns fewer bytes.
      *
-     * @return string     Returns the data read from the stream.
+     * @return string|false Returns the data read from the stream, false if
+     *                      unable to read or if an error occurs.
      */
     public function read($length);
 
     /**
-     * Returns the remaining contents in a string, up to maxlength bytes.
+     * Returns the remaining contents in a string
      *
-     * @param int $maxLength The maximum bytes to read. Defaults to -1 (read
-     *                       all the remaining buffer).
      * @return string
      */
-    public function getContents($maxLength = -1);
+    public function getContents();
+
+    /**
+     * Get stream metadata as an associative array or retrieve a specific key.
+     *
+     * The keys returned are identical to the keys returned from PHP's
+     * stream_get_meta_data() function.
+     *
+     * @param string $key Specific metadata to retrieve.
+     *
+     * @return array|mixed|null Returns an associative array if no key is
+     *                          provided. Returns a specific key value if a key
+     *                          is provided and the value is found, or null if
+     *                          the key is not found.
+     * @see http://php.net/manual/en/function.stream-get-meta-data.php
+     */
+    public function getMetadata($key = null);
 }
 ```
